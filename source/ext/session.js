@@ -12,6 +12,7 @@ white:true*/
     /** @scope XT.Session */
 
     privileges: {},
+    relevantPrivileges: [], // those privileges that are needed for an active extension
     settings: {},
     schema: {},
 
@@ -19,7 +20,8 @@ white:true*/
     PRIVILEGES: 0x02,
     SCHEMA: 0x04,
     LOCALE: 0x08,
-    ALL: 0x01 | 0x02 | 0x04 | 0x08,
+    EXTENSIONS: 0x10,
+    ALL: 0x01 | 0x02 | 0x04 | 0x08 | 0x10,
 
     /**
       Loads session objects for settings, preferences and privileges into local
@@ -38,7 +40,13 @@ white:true*/
         settings,
         schemaOptions,
         localeOptions,
-        callback;
+        extensionOptions,
+        callback,
+        schemaCount = 0,
+        schemasReturned = 0,
+        privilegeSetCount = 0,
+        privilegeSetsReturned = 0,
+        i;
 
       if (options && options.success && options.success instanceof Function) {
         callback = options.success;
@@ -51,13 +59,23 @@ white:true*/
 
         // callback
         privilegesOptions.success = function (resp) {
-          var i;
-          privileges = new Backbone.Model();
-          privileges.get = function (attr) {
-            // Sometimes the answer is already known...
-            if (_.isBoolean(attr)) { return attr; }
-            return Backbone.Model.prototype.get.call(this, attr);
-          };
+          var privileges, i;
+
+          if (that.getPrivileges().attributes) {
+            // add incoming data to already loaded privilege
+            privileges = that.getPrivileges();
+
+          } else {
+            // create privilege as a new model
+            privileges = new Backbone.Model();
+            privileges.get = function (attr) {
+              // Sometimes the answer is already known...
+              if (_.isBoolean(attr)) { return attr; }
+              return Backbone.Model.prototype.get.call(this, attr);
+            };
+          }
+
+          privilegeSetsReturned++;
 
           // Loop through the response and set a privilege for each found.
           for (i = 0; i < resp.length; i++) {
@@ -67,11 +85,21 @@ white:true*/
           // Attach the privileges to the session object.
           that.setPrivileges(privileges);
 
-          callback();
+          if (privilegeSetsReturned === privilegeSetCount) {
+            callback();
+          }
         };
 
-        // dispatch
-        XT.dataSource.dispatch('XT.Session', 'privileges', null, privilegesOptions);
+        if (!privilegesOptions.databaseTypes) {
+          // by default we just run one query against the default database type
+          privilegesOptions.databaseTypes = [undefined];
+        }
+        for (i = 0; i < privilegesOptions.databaseTypes.length; i++) {
+          privilegesOptions.databaseType = privilegesOptions.databaseTypes[i];
+          XT.dataSource.dispatch('XT.Session', 'privileges', null, privilegesOptions);
+          privilegeSetCount++;
+        }
+
       }
 
       if (types & this.SETTINGS) {
@@ -95,45 +123,64 @@ white:true*/
 
         // callback
         schemaOptions.success = function (resp) {
-          var schema = new Backbone.Model(resp),
+          var schema,
             prop,
             Klass,
             relations,
             i;
-          that.setSchema(schema);
 
-          // Set relations
-          for (prop in schema.attributes) {
-            if (schema.attributes.hasOwnProperty(prop)) {
-              Klass = XM.Model.getObjectByName('XM' + '.' + prop);
-              if (Klass) {
-                relations = schema.attributes[prop].relations || [];
-                if (relations.length) {
-                  Klass.prototype.relations = [];
-                  for (i = 0; i < relations.length; i++) {
-                    if (relations[i].type === "Backbone.HasOne") {
-                      relations[i].type = Backbone.HasOne;
-                    } else if (relations[i].type === "Backbone.HasMany") {
-                      relations[i].type = Backbone.HasMany;
-                    } else {
-                      continue;
+          if (that.getSchema().attributes) {
+            // add incoming data to already loaded schema attributes
+            schema = that.getSchema();
+            schema.set(resp);
+
+          } else {
+            // create schema as a new model
+            schema = new Backbone.Model(resp);
+            that.setSchema(schema);
+          }
+          schemasReturned++;
+
+          if (schemasReturned === schemaCount) {
+            // Set relations
+            for (prop in schema.attributes) {
+              if (schema.attributes.hasOwnProperty(prop)) {
+                Klass = XM.Model.getObjectByName('XM' + '.' + prop);
+                if (Klass) {
+                  relations = schema.attributes[prop].relations || [];
+                  if (relations.length) {
+                    Klass.prototype.relations = [];
+                    for (i = 0; i < relations.length; i++) {
+                      if (relations[i].type === "Backbone.HasOne") {
+                        relations[i].type = Backbone.HasOne;
+                      } else if (relations[i].type === "Backbone.HasMany") {
+                        relations[i].type = Backbone.HasMany;
+                      } else {
+                        continue;
+                      }
+                      Klass.prototype.relations.push(relations[i]);
                     }
-                    Klass.prototype.relations.push(relations[i]);
                   }
-                }
 
-                privileges = schema.attributes[prop].privileges;
-                if (privileges) {
-                  Klass.prototype.privileges = privileges;
+                  privileges = schema.attributes[prop].privileges;
+                  if (privileges) {
+                    Klass.prototype.privileges = privileges;
+                  }
                 }
               }
             }
+            callback();
           }
-
-          callback();
         };
 
+        // get schema for instance DB models
         XT.dataSource.dispatch('XT.Session', 'schema', 'xm', schemaOptions);
+        schemaCount++;
+
+        // get schema for global DB models
+        schemaOptions.databaseType = 'global';
+        XT.dataSource.dispatch('XT.Session', 'schema', 'xm', schemaOptions);
+        schemaCount++;
       }
 
       if (types & this.LOCALE) {
@@ -147,6 +194,21 @@ white:true*/
         };
 
         XT.dataSource.dispatch('XT.Session', 'locale', null, localeOptions);
+      }
+
+      if (types & this.EXTENSIONS) {
+        extensionOptions = options ? _.clone(options) : {};
+
+        // callback
+        extensionOptions.error = function (resp) {
+          XT.log("Error loading extensions");
+        };
+        extensionOptions.success = function (resp) {
+          that.extensions = resp;
+          callback();
+        };
+
+        XT.dataSource.getExtensionList(extensionOptions);
       }
 
       return true;
@@ -186,6 +248,20 @@ white:true*/
     setPrivileges: function (value) {
       this.privileges = value;
       return this;
+    },
+
+    /**
+      Each extension has a set of privileges that it cares about. The extension will load those
+      privileges here into the session object with then name of the module that the privilege
+      should be associated with. The module name will frequently be the extension name, but some
+      extensions do not have their own modules.
+
+      @param {String} module
+      @param {Array} privArray
+    */
+    addRelevantPrivileges: function (module, privArray) {
+      var privMap = _.map(privArray, function (priv) {return {module: module, privilege: priv}; });
+      this.relevantPrivileges = _.union(this.relevantPrivileges, privMap);
     },
 
     // ..........................................................

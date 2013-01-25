@@ -8,7 +8,7 @@ white:true*/
 
   /**
     @class
-
+	@name XM.Characteristic
     @extends XM.Document
   */
   XM.Characteristic = XM.Document.extend(/** @lends XM.Characteristic# */{
@@ -33,11 +33,20 @@ white:true*/
       "isItems",
       "order"
     ],
+    
+    contextAttributes: [
+      "isAddresses",
+      "isContacts",
+      "isAccounts",
+      "isItems",
+      "isIncidents",
+      "isOpportunities"
+    ],
 
     //..................................................
     // METHODS
     //
-
+    
     initialize: function () {
       XM.Document.prototype.initialize.apply(this, arguments);
       this.on('change:characteristicType', this.characteristicTypeDidChange);
@@ -82,9 +91,15 @@ white:true*/
         values = [],
         i;
 
-      // Validate at least one context selected
-      if (!(this.get('isItems') || this.get('isContacts') ||
-            this.get('isAddresses') || this.get('isAccounts'))) {
+      var contextError = false;
+      for (i = 0; i < this.contextAttributes.length; i++) {
+        var attr = this.contextAttributes[i];
+        if (this.get(attr)) {
+          contextError = true;
+          break;
+        }
+      }
+      if (!contextError) {
         return XT.Error.clone('xt2002');
       }
 
@@ -129,7 +144,7 @@ white:true*/
 
   /**
     @class
-
+    @name XM.CharacteristicOption
     @extends XM.Model
   */
   XM.CharacteristicOption = XM.Model.extend(/** @lends XM.CharacteristicOption# */{
@@ -147,10 +162,8 @@ white:true*/
   });
 
   /**
-    @class
-
-    Base class for use on characteristic assignment classes.
-
+    @class Base class for use on characteristic assignment classes.
+    @name XM.CharacteristicAssignment
     @extends XM.Model
   */
   XM.CharacteristicAssignment = XM.Model.extend(/** @lends XM.CharacteristicAssignment# */{
@@ -183,7 +196,7 @@ white:true*/
 
   /**
     @class
-
+    @name XM.CharacteristicCollection
     @extends XM.Collection
   */
   XM.CharacteristicCollection = XM.Collection.extend(/** @lends XM.CharacteristicCollection# */{
