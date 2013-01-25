@@ -10,13 +10,12 @@ white:true*/
   "use strict";
 
   /**
-    @class
+    @class `XM.Model` is an abstract class designed to operate with `XT.DataSource`.
+    It should be subclassed for any specific implementation. Subclasses should
+    include a `recordType` the data source will use to retrieve the record.
 
-    `XM.Model` is an abstract class designed to operate with `XT.DataSource`.
-    It should be subclassed for any specific implentation. Subclasses should
-    include a `recordType` the data source will use to retreive the record.
-
-    To create a new model include `isNew` in the options like so:
+    To create a new model include `isNew` in the options:
+    <pre><code>
       // Create a new class
       XM.MyModel = XM.Model.extend({
         recordType: 'XM.MyModel'
@@ -24,14 +23,18 @@ white:true*/
 
       // Instantiate a new model object
       m = new XM.MyModel(null, {isNew: true});
-
-    To load an existing record include an id in the attributes like so:
+   </code></pre>
+    To load an existing record include an id in the attributes:
+    <pre><code>
       m = new XM.MyModel({id: 1});
       m.fetch();
+    </code></pre>
 
-    @extends Backbone.RelationalModel
+    @name XM.Model
+    @description To create a new model include `isNew` in the options:
     @param {Object} Attributes
     @param {Object} Options
+    @extends Backbone.RelationalModel
   */
   XM.Model = Backbone.RelationalModel.extend(/** @lends XM.Model# */{
 
@@ -48,6 +51,12 @@ white:true*/
       see issue 18661
     */
     binaryField: null,
+
+    /**
+      Differentiates models that belong to postbooks instances versus models
+      that belong to the global database
+    */
+    databaseType: 'instance',
 
     /**
       The last error message reported.
@@ -67,7 +76,7 @@ white:true*/
     privileges: null,
 
     /**
-      Indicates whethere the model is read only.
+      Indicates whether the model is read only.
 
       @type {Boolean}
     */
@@ -206,7 +215,7 @@ white:true*/
 
     /**
       Called after confirmation that the model was destroyed on the
-      datatsource.
+      data source.
     */
     didDestroy: function () {
       var K = XM.Model;
@@ -305,8 +314,8 @@ white:true*/
         };
       if ((parent && parent.canUpdate(this)) ||
           (!parent && canDelete)) {
-        this.setStatus(K.DESTROYED_DIRTY, {cascade: true});
         this._wasNew = this.isNew(); // Hack so prototype call will still work
+        this.setStatus(K.DESTROYED_DIRTY, {cascade: true});
 
         // If it's top level commit to the server now.
         if (!parent && canDelete) {
@@ -319,7 +328,9 @@ white:true*/
             for (i = 0; i < children.length; i += 1) {
               children[i].didDestroy();
             }
-            XT.log('Destroy successful');
+            if (XT.debugging) {
+              XT.log('Destroy successful');
+            }
             if (success) { success(model, resp, options); }
           };
           result = Backbone.Model.prototype.destroy.call(this, options);
@@ -336,6 +347,22 @@ white:true*/
     },
 
     /*
+      Forward a dispatch request to the data source. Runs a "dispatchable" database function.
+      Include a `success` callback function in options to handle the result.
+
+      @param {String} Name of the class
+      @param {String} Function name
+      @param {Object} Parameters
+      @param {Object} Options
+    */
+    dispatch: function (name, func, params, options) {
+      options = options ? _.clone(options) : {};
+      if (!options.databaseType) { options.databaseType = this.databaseType; }
+      var dataSource = options.dataSource || XT.dataSource;
+      return dataSource.dispatch(name, func, params, options);
+    },
+
+    /*
       Reimplemented to handle status changes.
 
       @param {Object} Options
@@ -347,12 +374,15 @@ white:true*/
         K = XM.Model,
         success = options.success,
         klass = this.getClass();
+
       if (klass.canRead()) {
         this.setStatus(K.BUSY_FETCHING, {cascade: true});
         options.cascade = true; // Update status of children
         options.success = function (resp) {
           model.setStatus(K.READY_CLEAN, options);
-          XT.log('Fetch successful');
+          if (XT.debugging) {
+            XT.log('Fetch successful');
+          }
           if (success) { success(model, resp, options); }
         };
         return Backbone.Model.prototype.fetch.call(this, options);
@@ -375,7 +405,7 @@ white:true*/
           options.force = true;
           that.set(that.idAttribute, resp, options);
         };
-        XT.dataSource.dispatch('XM.Model', 'fetchId', this.recordType, options);
+        this.dispatch('XM.Model', 'fetchId', this.recordType, options);
       }
 
       // Cascade through `HasMany` relations if specified.
@@ -397,10 +427,10 @@ white:true*/
 
     /**
      * Retrieve related objects.
-     * @param key {string} The relation key to fetch models for.
-     * @param options {Object} Options for 'Backbone.Model.fetch' and 'Backbone.sync'.
-     * @param update {boolean} Whether to force a fetch from the server (updating existing models).
-     * @return {Array} An array of request objects
+     * @param {String} key The relation key to fetch models for.
+     * @param {Object} options Options for 'Backbone.Model.fetch' and 'Backbone.sync'.
+     * @param {Boolean} update  Whether to force a fetch from the server (updating existing models).
+     * @returns {Array} An array of request objects.
      */
     fetchRelated: function (key, options, update) {
       options = options || {};
@@ -469,10 +499,12 @@ white:true*/
 
       @param {String} Property to search on, typically a user key
       @param {String} Value to search for
-      @param {Object} options
-      @returns {Object} Receiever
+      @param {Object} Options
+      @returns {Object} Receiver
     */
     findExisting: function (key, value, options) {
+      options = options || {};
+      options.databaseType = options.databaseType || this.databaseType;
       return this.getClass().findExisting.call(this, key, value, options);
     },
 
@@ -549,14 +581,12 @@ white:true*/
     /**
       Searches attributes first, if not found then returns either a function call
       or property value that matches the key. It supports search on an attribute path
-      through a model hierachy.
-
-      example:
-        // Returns the first name attribute from primary contact model.
-        var firstName = m.getValue('primaryContact.firstName');
-
+      through a model hierarchy.
       @param {String} Key
       @returns {Any}
+      @example
+      // Returns the first name attribute from primary contact model.
+      var firstName = m.getValue('primaryContact.firstName');
     */
     getValue: function (key) {
       var parts,
@@ -744,11 +774,11 @@ white:true*/
       };
       return parse(resp);
     },
-    
+
     /**
       Revert the model to the previous status. Useful for reseting status
       after a failed validation.
-      
+
       param {Boolean} - cascade
     */
     revertStatus: function (cascade) {
@@ -758,7 +788,7 @@ white:true*/
         attr;
       this.setStatus(this._prevStatus || K.EMPTY);
       this._prevStatus = prev;
-      
+
       // Cascade changes through relations if specified
       if (cascade) {
         _.each(this.relations, function (relation) {
@@ -810,7 +840,9 @@ white:true*/
         options.validateSave = true;
         options.success = function (resp) {
           model.setStatus(K.READY_CLEAN, options);
-          XT.log('Save successful');
+          if (XT.debugging) {
+            XT.log('Save successful');
+          }
           if (success) { success(model, resp, options); }
         };
 
@@ -829,14 +861,12 @@ white:true*/
     },
 
     /**
-      Set the entire model, or a specific model attribute to `readOnly`.
-
-      Examples:
-
+      Set the entire model, or a specific model attribute to `readOnly`.<br />
+      Examples:<pre><code>
       m.setReadOnly() // sets model to read only
       m.setReadOnly(false) // sets model to be editable
       m.setReadOnly('name') // sets 'name' attribute to read-only
-      m.setReadOnly('name', false) // sets 'name' attribute to be editable
+      m.setReadOnly('name', false) // sets 'name' attribute to be editable</code></pre>
 
       Note: Privilege enforcement supercedes read-only settings.
 
@@ -940,11 +970,13 @@ white:true*/
     },
 
     /**
-      Sync to xTuple datasource.
+      Sync to xTuple data source.
     */
     sync: function (method, model, options) {
       options = options ? _.clone(options) : {};
+      if (!options.databaseType) { options.databaseType = this.databaseType; }
       var that = this,
+        dataSource = options.dataSource || XT.dataSource,
         id = options.id || model.id,
         recordType = this.recordType,
         result,
@@ -958,12 +990,13 @@ white:true*/
 
       // Read
       if (method === 'read' && recordType && id && options.success) {
-        result = XT.dataSource.retrieveRecord(recordType, id, options);
+        result = dataSource.retrieveRecord(recordType, id, options);
 
       // Write
       } else if (method === 'create' || method === 'update' || method === 'delete') {
-        result = XT.dataSource.commitRecord(model, options);
+        result = dataSource.commitRecord(model, options);
       }
+
       return result || false;
     },
 
@@ -977,23 +1010,23 @@ white:true*/
       @returns {XT.Request} Request
     */
     used: function (options) {
-      return XT.dataSource.dispatch('XM.Model', 'used', [this.recordType, this.id], options);
+      options.databaseType = this.databaseType;
+      return this.getClass().used(this.id, options);
     },
 
     /**
-      Default validation checks `attributes` for:
-
-        * Data type integrity.
-        * Required fields when `validateSave=true` option is passed.
-        * Read Only and Privileges (when editing).
-
+      Default validation checks `attributes` for:<br />
+        &#42; Data type integrity.<br />
+        &#42; Required fields when `validateSave=true` option is passed.<br />
+        &#42; Read Only and Privileges (when editing).<br />
+      <br />
       Returns `undefined` if the validation succeeded, or some value, usually
-      an error message, if it fails.
-
+      an error message, if it fails.<br />
+      <br />
       Use the `force` option to ignore validation. This is useful when
       higher level function calls passing through `set` need to skip
-      validation to work properly.
-
+      validation to work properly.<br />
+      <br />
       It is recommended customizations be implemented on `validateEdit` or
       `validateSave` to reduce risk of accidentally over-writing or losing
       logic included in the base validate function.
@@ -1249,16 +1282,20 @@ white:true*/
       if (sessionPrivs && sessionPrivs.get) {
         // Check global privileges.
         if (privs.all && privs.all[action]) {
-          isGrantedAll = sessionPrivs.get(privs.all[action]);
+          isGrantedAll = this.checkCompoundPrivs(sessionPrivs, privs.all[action]);
+        }
+        // update privs are always sufficient for viewing as well
+        if (!isGrantedAll && privs.all && action === 'read' && privs.all.update) {
+          isGrantedAll = this.checkCompoundPrivs(sessionPrivs, privs.all.update);
         }
 
         // Check personal privileges.
         if (!isGrantedAll && privs.personal && privs.personal[action]) {
-          isGrantedPersonal = sessionPrivs.get(privs.personal[action]);
+          isGrantedPersonal = this.checkCompoundPrivs(sessionPrivs, privs.personal[action]);
         }
-        if (!isGrantedPersonal && privs.personal && action === 'read'  &&
-            privs.personal.update) {
-          isGrantedPersonal = sessionPrivs.get(privs.personal.update);
+        // update privs are always sufficient for viewing as well
+        if (!isGrantedPersonal && privs.personal && action === 'read' && privs.personal.update) {
+          isGrantedPersonal = this.checkCompoundPrivs(sessionPrivs, privs.personal.update);
         }
       }
 
@@ -1278,6 +1315,16 @@ white:true*/
       }
 
       return isGrantedAll || isGrantedPersonal;
+    },
+
+    checkCompoundPrivs: function (sessionPrivs, privileges) {
+      if (typeof privileges !== 'string') {
+        return privileges;
+      }
+      var match = _.find(privileges.split(" "), function (priv) {
+        return sessionPrivs.get(priv);
+      });
+      return !!match; // return true if match is truthy
     },
 
     /**
@@ -1330,12 +1377,13 @@ white:true*/
       @param {String} Property to search on, typically a user key
       @param {String} Value to search for
       @param {Object} Options
-      @returns {Object} Receiever
+      @returns {Object} Receiver
     */
     findExisting: function (key, value, options) {
       var recordType = this.recordType || this.prototype.recordType,
-        params = [ recordType, key, value, this.id || -1 ];
-      XT.dataSource.dispatch('XM.Model', 'findExisting', params, options);
+        params = [ recordType, key, value, this.id || -1 ],
+        dataSource = options.dataSource || XT.dataSource;
+      dataSource.dispatch('XM.Model', 'findExisting', params, options);
       XT.log("XM.Model.findExisting for: " + recordType);
       return this;
     },
@@ -1347,6 +1395,20 @@ white:true*/
       options = options ? _.clone(options) : {};
       options.force = true;
       return Backbone.RelationalModel.findOrCreate.call(this, attributes, options);
+    },
+
+    /**
+      Determine whether this record has been referenced by another. By default
+      this function inspects foreign key relationships on the database, and is
+      therefore dependent on foreign key relationships existing where appropriate
+      to work correctly.
+
+      @param {Number} Id
+      @param {Object} Options
+      @returns {XT.Request} Request
+    */
+    used: function (id, options) {
+      return XT.dataSource.dispatch('XM.Model', 'used', [this.prototype.recordType, id], options);
     },
 
     // ..........................................................
@@ -1381,7 +1443,7 @@ white:true*/
       State for records that are still loaded.
 
       This is the initial state of a new record. It will not be editable until
-      a record is fetch from the store, or it is initialied with the `isNew`
+      a record is fetch from the store, or it is initialized with the `isNew`
       option.
 
       @static
@@ -1425,7 +1487,7 @@ white:true*/
 
 
     /**
-      State for records that are loaded and ready for use with local changes
+      State for records that are loaded and ready for use with local changes.
 
       @static
       @constant
